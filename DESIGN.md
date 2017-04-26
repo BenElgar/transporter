@@ -98,13 +98,13 @@ The requirements for each component in the system could be broken down as follow
   message not being sent to the underlying writer (i.e. skipped)
 
 In order to facilitate this, the reader will have an append only commit log. When a message 
-is sent down the pipeline, it will be appended to the commit log. Each writer will have its own offset in the 
-offset log (similar to a consumer group in kafka) wherein an acknowledgement of each message can be provided 
+is sent down the pipeline, it will be appended to the commit log. Each writer will have its own offset log 
+(similar to a consumer group in kafka) wherein an acknowledgement of each message can be provided 
 after a successful write to the underlying source or if the message was skipped, the commit id will be 
 appended to the offset log. _If_ the writer uses a bulk mechanism, any errors returned from the bulk operation 
-should cause the system to stop. The consmer offsets will be written to the log at a configurable interval 
-(default of 1s) wherein a forceful termination of the system will only result in a processed message's offset 
-not being written to disk equal to the total amount of time between the interval.
+should cause the system to stop. The consmer offsets will be written to the log on acknowledgement 
+wherein a forceful termination of the system will only result in a processed message's offset 
+not being written to disk equal to the total amount of time it takes for the program to receive acknowledgement.
 
 ### Normal Operations
 
@@ -113,8 +113,8 @@ Example of a bulk writer
 ```
 X     = message
 A/B/C = key (equal to the namespace)
-c0    = consumer 0 offset
-c1    = consumer 1 offset
+c0    = consumer 0 offset log
+c1    = consumer 1 offset log
 ```
 
 commit log
@@ -126,12 +126,20 @@ key| A | A | B | B | A | A | B | B | C | A | C | B | A | A | C | B |   |
 id   0   1   2   3   4   5   6   7   8   9   10  11  12  13  14  15  16
 ```
 
-offset log
+c0 offset log
 ```
-   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+
-key|c0 |c0 |c0 |c1 |c0 |c1 |c0 |c1 |c0 |c1 |c0 |   |   |   |
-val| 1 | 4 | 6 | 4 | 4 | 5 | 7 | 7 | 10| 13| 12|   |   |   |
-   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+   +---+---+---+---+---+---+---+---+---+
+key| A | A | B | B | C | A |   |   |   |
+val| 1 | 4 | 6 | 7 | 10| 12|   |   |   |
+   +---+---+---+---+---+---+---+---+---+
+```
+
+c1 offset log
+```
+   +---+---+---+---+---+---+---+---+---+
+key| B | A | A | B | C | A |   |   |   |
+val| 2 | 4 | 5 | 7 | 10| 13|   |   |   |
+   +---+---+---+---+---+---+---+---+---+
 ```
 
 In the above scenario, the following would represent the current state of the system:
@@ -164,12 +172,20 @@ key| A | A | B | B | A | A | B | B | C | A | C | B | A | A | C | B |   |
 id   0   1   2   3   4   5   6   7   8   9   10  11  12  13  14  15  16
 ```
 
-offset log
+c0 offset log
 ```
-   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+
-key|c0 |c0 |c0 |c1 |c0 |c1 |c0 |c1 |c0 |c1 |c0 |c0 |c1 |   |
-val| 1 | 4 | 6 | 4 | 4 | 5 | 7 | 7 | 10| 13| 12| 15| 15|   |
-   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+   +---+---+---+---+---+---+---+---+---+
+key| A | A | B | B | C | A | A | C | B |
+val| 1 | 4 | 6 | 7 | 10| 12| 13| 14| 15|
+   +---+---+---+---+---+---+---+---+---+
+```
+
+c1 offset log
+```
+   +---+---+---+---+---+---+---+---+---+
+key| B | A | A | B | C | A | C | B |   |
+val| 2 | 4 | 5 | 7 | 10| 13| 14| 15|   |
+   +---+---+---+---+---+---+---+---+---+
 ```
 
 ### Message Failures
@@ -188,7 +204,7 @@ id   0   1   2   3   4   5   6   7   8   9   10  11  12  13  14  15  16
 offset log
 ```
    +---+---+---+---+---+---+---+---+---+---+
-key|c0 |c0 |c0 |c0 |c0 |c0 |   |   |   |   |
+key| A | A | A | A | A | A |   |   |   |   |
 val| 1 | 3 | 4 | 5 | 7 | 8 |   |   |   |   |
    +---+---+---+---+---+---+---+---+---+---+
 ```
@@ -206,7 +222,7 @@ id   0   1   2   3   4   5   6   7   8   9   10  11  12  13  14  15  16
 offset log
 ```
    +---+---+---+---+---+---+---+---+---+---+
-key|c0 |c0 |c0 |c0 |c0 |c0 |   |   |   |   |
+key| A | A | A | A | A | A |   |   |   |   |
 val| 1 | 3 | 4 | 5 | 7 | 8 |   |   |   |   |
    +---+---+---+---+---+---+---+---+---+---+
 ```
@@ -270,7 +286,7 @@ id   17  18  19  20  21  22  23  24  25  26  27  28  29  30  31  32  33
 offset log
 ```
    +---+---+---+---+---+---+---+---+---+---+
-key|c0A|c0A|c0B|c0C|c0A|c0B|c0C|c0A|c0B|c0C|
+key| A | A | B | C | A | B | C | A | B | C |
 val| 1 | 8 | 1 | 3 | 13| 12| 9 | 26| 23| 27|
    +---+---+---+---+---+---+---+---+---+---+
 ```
@@ -296,7 +312,7 @@ id   17  18  19  20  21  22  23  24  25  26  27  28  29  30  31  32  33
 offset log after compaction
 ```
    +---+---+---+---+---+---+---+---+---+---+
-key|c0A|c0B|c0C|   |   |   |   |   |   |   |
+key| A | B | C |   |   |   |   |   |   |   |
 val| 26| 23| 27|   |   |   |   |   |   |   |
    +---+---+---+---+---+---+---+---+---+---+
 ```
